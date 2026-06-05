@@ -9,7 +9,7 @@ export const metadata: Metadata = {
     template: '%s · Site',
   },
   description: '작은 서비스들을 모아두는 개인 실험실.',
-  metadataBase: new URL('https://atglab.github.io'),
+  metadataBase: new URL('https://atzlab.github.io/Site/'),
 };
 
 export const viewport: Viewport = {
