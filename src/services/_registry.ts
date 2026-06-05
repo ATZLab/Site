@@ -1,0 +1,23 @@
+/**
+ * Service registry. Add a new service in 3 steps:
+ *   1. Add a folder under `src/services/<id>/` with its own logic/components.
+ *   2. Add a route under `src/app/(lab)/<route>/page.tsx`.
+ *   3. Register it below.
+ *
+ * Each entry powers the lab index page and the landing-page preview.
+ */
+export interface ServiceMeta {
+  id: string;
+  label: string;
+  description: string;
+  route: string;
+}
+
+export const services: ServiceMeta[] = [
+  {
+    id: 'ladder',
+    label: '사다리 타기',
+    description: '이름과 항목을 입력하면 경로를 추적해 매칭해줘요.',
+    route: '/lab/ladder',
+  },
+];
