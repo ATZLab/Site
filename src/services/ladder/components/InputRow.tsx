@@ -9,7 +9,6 @@ interface InputRowProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'onC
   onRemove: () => void;
   /** Disable the remove button (e.g. when only one row remains). */
   disableRemove?: boolean;
-  placeholder?: string;
   ariaLabel: string;
 }
 
@@ -22,7 +21,6 @@ export function InputRow({
   onChange,
   onRemove,
   disableRemove,
-  placeholder,
   ariaLabel,
   ...rest
 }: InputRowProps) {
@@ -31,7 +29,7 @@ export function InputRow({
       <Input
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
+        placeholder="입력해 주세요"
         aria-label={ariaLabel}
         className="flex-1"
         {...rest}

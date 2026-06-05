@@ -16,8 +16,8 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 const MIN_LEVELS = 4;
 const MAX_LEVELS = 10;
 
-const INITIAL_NAMES = ['민준', '서연', '도윤', '지우'];
-const INITIAL_RESULTS = ['치킨', '피자', '떡볶이', '아이스크림'];
+const INITIAL_NAMES = ['', '', ''];
+const INITIAL_RESULTS = ['', '', ''];
 
 type RevealMode = 'all' | 'single';
 
@@ -218,7 +218,6 @@ export function LadderGame() {
               onRemove={removeName}
               onAdd={addName}
               minItems={2}
-              placeholder="이름 입력"
             />
             <InputColumn
               label="결과"
@@ -228,7 +227,6 @@ export function LadderGame() {
               onRemove={removeResult}
               onAdd={addResult}
               minItems={1}
-              placeholder="결과 입력"
             />
           </div>
 
@@ -285,7 +283,6 @@ interface InputColumnProps {
   onRemove: (i: number) => void;
   onAdd: () => void;
   minItems: number;
-  placeholder: string;
 }
 
 function InputColumn({
@@ -296,7 +293,6 @@ function InputColumn({
   onRemove,
   onAdd,
   minItems,
-  placeholder,
 }: InputColumnProps) {
   return (
     <div>
@@ -312,7 +308,6 @@ function InputColumn({
             onChange={(v) => onUpdate(i, v)}
             onRemove={() => onRemove(i)}
             disableRemove={items.length <= minItems}
-            placeholder={placeholder}
             ariaLabel={`${label} ${i + 1}`}
             maxLength={20}
           />

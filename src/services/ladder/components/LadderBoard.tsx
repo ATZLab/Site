@@ -17,11 +17,13 @@ interface LadderBoardProps {
 }
 
 // Geometry — keep all in SVG units; SVG scales the canvas to fit.
-const CELL_W = 70;
-const CELL_H = 26;
-const TOP_PAD = 36;
-const BOTTOM_PAD = 44;
+const CELL_W = 48;
+const CELL_H = 20;
+const TOP_PAD = 30;
+const BOTTOM_PAD = 38;
 const SIDE_PAD = 24;
+const PILL_W = 44;
+const PILL_H = 16;
 
 const PATH_DRAW_MS = 1100;
 const RUNG_FADE_MS = 220;
@@ -94,8 +96,14 @@ export function LadderBoard({ ladder, assignments, reveal, onRevealName }: Ladde
     <div className="w-full overflow-x-auto">
       <svg
         viewBox={`0 0 ${totalW} ${totalH}`}
-        width="100%"
-        style={{ minWidth: Math.max(240, totalW) }}
+        preserveAspectRatio="xMidYMid meet"
+        style={{
+          maxWidth: '100%',
+          maxHeight: 360,
+          height: 'auto',
+          display: 'block',
+          margin: '0 auto',
+        }}
         role="img"
         aria-label="사다리 타기 보드"
       >
@@ -197,11 +205,11 @@ export function LadderBoard({ ladder, assignments, reveal, onRevealName }: Ladde
               aria-label={`${a.name} 경로 보기`}
             >
               <rect
-                x={(lineX[i] ?? 0) - 26}
-                y={TOP_PAD - 24}
-                width={52}
-                height={18}
-                rx={9}
+                x={(lineX[i] ?? 0) - PILL_W / 2}
+                y={TOP_PAD - 22}
+                width={PILL_W}
+                height={PILL_H}
+                rx={PILL_H / 2}
                 fill={isRevealed ? 'var(--color-accent)' : '#ffffff'}
                 stroke={isRevealed ? 'var(--color-accent)' : '#e4e4e7'}
                 strokeWidth={1}
@@ -213,13 +221,13 @@ export function LadderBoard({ ladder, assignments, reveal, onRevealName }: Ladde
                 textAnchor="middle"
                 className="pointer-events-none select-none"
                 style={{
-                  fontSize: 11,
+                  fontSize: 10,
                   fontWeight: 500,
                   fill: isRevealed ? '#ffffff' : '#3f3f46',
                   transition: 'fill 200ms ease-out',
                 }}
               >
-                {truncate(a.name, 5)}
+                {truncate(a.name, 4)}
               </text>
             </g>
           );
@@ -240,14 +248,14 @@ export function LadderBoard({ ladder, assignments, reveal, onRevealName }: Ladde
                 textAnchor="middle"
                 className="select-none"
                 style={{
-                  fontSize: 11,
+                  fontSize: 10,
                   fontWeight: 600,
                   fill: '#18181b',
                   opacity: reveal.resultsShown && anyRevealedToLine ? 1 : 0,
                   transition: 'opacity 300ms ease-out',
                 }}
               >
-                {truncate(result, 6)}
+                {truncate(result, 5)}
               </text>
             </g>
           );
