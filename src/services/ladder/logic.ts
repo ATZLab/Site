@@ -4,7 +4,7 @@
  */
 
 export interface Ladder {
-  /** Number of vertical lines (= number of participants). */
+  /** Number of vertical lines. Equals max(names, results) at assignment time. */
   width: number;
   /** Total number of horizontal levels. */
   levels: number;
@@ -17,10 +17,14 @@ export interface Ladder {
 }
 
 export interface Assignment {
-  participant: string;
+  name: string;
   result: string;
-  /** Indices of (level, line) the participant visited, top to bottom. */
+  /** The line the name ends on after the trace (the result is the label there). */
+  endLine: number;
+  /** Indices of (level, line) the name visited, top to bottom. */
   path: Array<{ level: number; line: number }>;
+  /** Index in the assignments array (== the starting line on the ladder). */
+  nameIndex: number;
 }
 
 /**
@@ -33,7 +37,7 @@ export function generateLadder(
   levels: number,
   rng: () => number = Math.random,
 ): Ladder {
-  if (width < 2) throw new Error('ladder requires at least 2 participants');
+  if (width < 2) throw new Error('ladder requires at least 2 lines');
   if (levels < 1) throw new Error('ladder requires at least 1 level');
 
   const rungs: Array<Array<number | null>> = [];
@@ -52,6 +56,16 @@ export function generateLadder(
     rungs.push(row);
   }
   return { width, levels, rungs };
+}
+
+/** Pick a random integer in [min, max] inclusive. */
+export function randomLevels(
+  min: number,
+  max: number,
+  rng: () => number = Math.random,
+): number {
+  if (max < min) throw new Error('randomLevels: max must be >= min');
+  return Math.floor(rng() * (max - min + 1)) + min;
 }
 
 /**
@@ -79,38 +93,37 @@ export function tracePath(
 }
 
 /**
- * Run every participant through the ladder and pair them with results based on
- * the line they ended on. Throws if `results.length !== participants.length`.
+ * Match names to results. Name and result counts can differ.
+ *   - If `names.length < results.length`: ladder width = results.length, names
+ *     are placed at the first N lines, results fill the bottom; unmatched
+ *     results (lines no name traces to) are simply not assigned.
+ *   - If `names.length > results.length`: ladder width = names.length, results
+ *     fill the first M lines, and any name tracing to a line beyond M gets "".
+ *   - The function only traces non-empty names; empty name rows are ignored.
  */
 export function assignResults(
-  participants: string[],
+  names: string[],
   results: string[],
   ladder: Ladder,
 ): Assignment[] {
-  if (participants.length !== ladder.width) {
-    throw new Error('participant count must match ladder width');
-  }
-  if (participants.length !== results.length) {
-    throw new Error('results count must match participants count');
-  }
+  const width = ladder.width;
+  const paddedNames = names.slice(0, width);
+  const paddedResults = results.slice(0, width);
+  while (paddedNames.length < width) paddedNames.push('');
+  while (paddedResults.length < width) paddedResults.push('');
 
-  const linesToResults = new Map<number, string>();
-  results.forEach((r, i) => linesToResults.set(i, r));
-
-  return participants.map((participant, i) => {
+  return paddedNames.map((name, i) => {
+    if (name === '') {
+      // Empty input row — no path to trace.
+      return { name: '', result: '', endLine: i, path: [], nameIndex: i };
+    }
     const { endLine, path } = tracePath(ladder, i);
     return {
-      participant,
-      result: linesToResults.get(endLine) ?? '',
+      name,
+      result: paddedResults[endLine] ?? '',
+      endLine,
       path,
+      nameIndex: i,
     };
   });
-}
-
-/** Parse a multi-line textarea into a trimmed, non-empty string list. */
-export function parseList(input: string): string[] {
-  return input
-    .split('\n')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
 }

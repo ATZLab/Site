@@ -13,7 +13,9 @@ export default function LadderPage() {
         <p className="mb-1 text-sm font-medium text-zinc-500">/lab/ladder</p>
         <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">사다리 타기</h1>
         <p className="mt-2 max-w-prose text-sm text-zinc-600">
-          이름과 같은 개수의 결과를 입력하면, 사다리를 무작위로 만들고 각 경로를 끝까지 따라가서 매칭해요.
+          이름과 결과를 입력하고 사다리를 만들어 보세요. 다리 칸은 무작위로 결정돼요.
+          <span className="font-medium text-zinc-900"> 한 번에 보기</span>로 전체 결과를 확인하거나,
+          <span className="font-medium text-zinc-900"> 시작점</span>을 하나씩 클릭해 그 경로만 따라가 볼 수 있어요.
         </p>
       </header>
       <LadderGame />

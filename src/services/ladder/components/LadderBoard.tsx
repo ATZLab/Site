@@ -1,85 +1,104 @@
 'use client';
 
 import { useMemo } from 'react';
-import type { Ladder } from '@/services/ladder/logic';
+import type { Assignment, Ladder } from '@/services/ladder/logic';
 
 interface RevealState {
-  rungsDrawn: number;
-  pathsRevealed: number;
+  mode: 'all' | 'single';
+  revealedNames: Set<number>;
   resultsShown: boolean;
 }
 
 interface LadderBoardProps {
   ladder: Ladder;
-  participants: string[];
-  results: string[];
+  assignments: Assignment[];
   reveal: RevealState;
+  onRevealName: (nameIndex: number) => void;
 }
 
 // Geometry — keep all in SVG units; SVG scales the canvas to fit.
 const CELL_W = 70;
-const CELL_H = 28;
+const CELL_H = 26;
 const TOP_PAD = 36;
 const BOTTOM_PAD = 44;
 const SIDE_PAD = 24;
 
-export function LadderBoard({ ladder, participants, results, reveal }: LadderBoardProps) {
+const PATH_DRAW_MS = 1100;
+const RUNG_FADE_MS = 220;
+
+interface Path {
+  nameIndex: number;
+  endLine: number;
+  points: Array<[number, number]>;
+  polyline: string;
+  length: number;
+}
+
+export function LadderBoard({ ladder, assignments, reveal, onRevealName }: LadderBoardProps) {
   const { width, levels, rungs } = ladder;
 
   const totalW = SIDE_PAD * 2 + (width - 1) * CELL_W;
   const totalH = TOP_PAD + levels * CELL_H + BOTTOM_PAD;
 
-  const lineX = useMemo(() => Array.from({ length: width }, (_, i) => SIDE_PAD + i * CELL_W), [width]);
-  const rungY = useMemo(() => Array.from({ length: levels }, (_, j) => TOP_PAD + (j + 1) * CELL_H), [levels]);
+  const lineX = useMemo(
+    () => Array.from({ length: width }, (_, i) => SIDE_PAD + i * CELL_W),
+    [width],
+  );
+  const rungY = useMemo(
+    () => Array.from({ length: levels }, (_, j) => TOP_PAD + (j + 1) * CELL_H),
+    [levels],
+  );
 
-  // Trace every path up-front so we can stagger-fade them via reveal.pathsRevealed.
-  const paths = useMemo(() => {
-    const result: Array<{ start: number; polyline: string; endLine: number }> = [];
-    for (let i = 0; i < width; i++) {
-      let current = i;
-      const points: Array<[number, number]> = [[lineX[i] ?? 0, TOP_PAD]];
-      for (let level = 0; level < levels; level++) {
-        const row = rungs[level];
-        if (row === undefined) continue;
-        if (current > 0 && row[current - 1] === current - 1) {
-          current -= 1;
-        } else if (current < width - 1 && row[current] === current) {
-          current += 1;
+  // Pre-compute every path so we can stagger their reveal.
+  const paths = useMemo<Path[]>(() => {
+    return assignments
+      .filter((a) => a.name !== '')
+      .map((a) => {
+        let current = a.nameIndex;
+        const points: Array<[number, number]> = [[lineX[current] ?? 0, TOP_PAD]];
+        for (let level = 0; level < levels; level++) {
+          const row = rungs[level];
+          if (row === undefined) continue;
+          if (current > 0 && row[current - 1] === current - 1) {
+            current -= 1;
+          } else if (current < width - 1 && row[current] === current) {
+            current += 1;
+          }
+          points.push([lineX[current] ?? 0, rungY[level] ?? 0]);
         }
-        points.push([lineX[current] ?? 0, rungY[level] ?? 0]);
-      }
-      points.push([lineX[current] ?? 0, TOP_PAD + levels * CELL_H]);
-      result.push({
-        start: i,
-        endLine: current,
-        polyline: points.map(([x, y]) => `${x},${y}`).join(' '),
+        points.push([lineX[current] ?? 0, TOP_PAD + levels * CELL_H]);
+        const length = polylineLength(points);
+        return {
+          nameIndex: a.nameIndex,
+          endLine: current,
+          points,
+          polyline: points.map(([x, y]) => `${x},${y}`).join(' '),
+          length,
+        };
       });
-    }
-    return result;
-  }, [width, levels, rungs, lineX, rungY]);
+  }, [assignments, rungs, levels, width, lineX, rungY]);
+
+  // End line → result label (keyed by the actual endLine, not assignment index).
+  const resultByEndLine = useMemo(() => {
+    const m = new Map<number, string>();
+    assignments.forEach((a) => {
+      if (a.result !== '') m.set(a.endLine, a.result);
+    });
+    return m;
+  }, [assignments]);
+
+  const totalRungs = rungs.reduce((acc, row) => acc + row.filter((r) => r !== null).length, 0);
+  const visibleRungCount = reveal.mode === 'all' ? totalRungs : 0;
 
   return (
     <div className="w-full overflow-x-auto">
       <svg
         viewBox={`0 0 ${totalW} ${totalH}`}
         width="100%"
-        style={{ minWidth: 240 }}
+        style={{ minWidth: Math.max(240, totalW) }}
         role="img"
-        aria-label={`사다리 타기 결과: ${participants.length}명, ${results.length}개 결과`}
+        aria-label="사다리 타기 보드"
       >
-        {/* Participant labels (top). */}
-        {participants.map((name, i) => (
-          <text
-            key={`p-${i}`}
-            x={lineX[i] ?? 0}
-            y={TOP_PAD - 12}
-            textAnchor="middle"
-            className="fill-zinc-700 text-[11px] font-medium"
-          >
-            {truncate(name, 6)}
-          </text>
-        ))}
-
         {/* Vertical lines. */}
         {lineX.map((x, i) => (
           <line
@@ -94,14 +113,23 @@ export function LadderBoard({ ladder, participants, results, reveal }: LadderBoa
           />
         ))}
 
-        {/* Rungs — each fades in once reveal.rungsDrawn passes its level. */}
-        {rungs.map((row, level) => {
-          const visible = level < reveal.rungsDrawn;
-          return row.map((leftIdx, i) => {
+        {/* Rungs — fade in once the game starts (single click) or all at once with
+            staggered delays for "reveal all". We map each rung to a "stagger order"
+            and conditionally apply the visible style. */}
+        {rungs.map((row, level) =>
+          row.map((leftIdx, i) => {
             if (leftIdx === null) return null;
             const x1 = lineX[i] ?? 0;
             const x2 = lineX[i + 1] ?? 0;
             const y = rungY[level] ?? 0;
+            // Stagger order = rung count up to this point.
+            let order = 0;
+            for (let lv = 0; lv < level; lv++) {
+              const r = rungs[lv];
+              if (r) order += r.filter((x) => x !== null).length;
+            }
+            order += row.slice(0, i).filter((x) => x !== null).length;
+            const visible = reveal.mode === 'all' && order < visibleRungCount;
             return (
               <line
                 key={`r-${level}-${i}`}
@@ -114,50 +142,114 @@ export function LadderBoard({ ladder, participants, results, reveal }: LadderBoa
                 strokeLinecap="round"
                 style={{
                   opacity: visible ? 1 : 0,
-                  transition: 'opacity 220ms ease-out',
+                  transition: `opacity ${RUNG_FADE_MS}ms ease-out`,
                 }}
               />
             );
-          });
-        })}
+          }),
+        )}
 
-        {/* Traced paths — one per participant, each fades in by index. */}
-        {paths.map((p, i) => {
-          const visible = i < reveal.pathsRevealed;
+        {/* Traced paths — draw with stroke-dashoffset animation. */}
+        {paths.map((p) => {
+          const isRevealed = reveal.revealedNames.has(p.nameIndex);
           return (
             <polyline
-              key={`path-${i}`}
+              key={`path-${p.nameIndex}`}
               points={p.polyline}
               fill="none"
               stroke="var(--color-accent)"
-              strokeWidth={2}
+              strokeWidth={2.25}
               strokeLinecap="round"
               strokeLinejoin="round"
               style={{
-                opacity: visible ? 0.85 : 0,
-                transition: 'opacity 320ms ease-out',
+                strokeDasharray: p.length,
+                strokeDashoffset: isRevealed ? 0 : p.length,
+                transition: `stroke-dashoffset ${PATH_DRAW_MS}ms cubic-bezier(0.5, 0, 0.35, 1)`,
+                opacity: isRevealed ? 0.95 : 0,
               }}
             />
           );
         })}
 
-        {/* Result labels (bottom) — shown only after all paths are revealed. */}
-        {results.map((result, i) => {
-          const line = paths[i]?.endLine ?? i;
+        {/* Participant name labels (top) — clickable. */}
+        {assignments.map((a, i) => {
+          if (a.name === '') {
+            return (
+              <text
+                key={`p-${i}`}
+                x={lineX[i] ?? 0}
+                y={TOP_PAD - 12}
+                textAnchor="middle"
+                className="fill-zinc-300 text-[11px]"
+              >
+                ·
+              </text>
+            );
+          }
+          const isRevealed = reveal.revealedNames.has(i);
           return (
-            <text
-              key={`r-${i}`}
-              x={lineX[line] ?? 0}
-              y={TOP_PAD + levels * CELL_H + 18}
-              textAnchor="middle"
-              className="fill-zinc-900 text-[11px] font-semibold"
-              style={{
-                opacity: reveal.resultsShown ? 1 : 0,
-                transition: 'opacity 300ms ease-out',
-              }}
+            <g
+              key={`p-${i}`}
+              style={{ cursor: 'pointer' }}
+              onClick={() => onRevealName(i)}
+              role="button"
+              tabIndex={0}
+              aria-label={`${a.name} 경로 보기`}
             >
-              {truncate(result, 6)}
-            </text>
+              <rect
+                x={(lineX[i] ?? 0) - 26}
+                y={TOP_PAD - 24}
+                width={52}
+                height={18}
+                rx={9}
+                fill={isRevealed ? 'var(--color-accent)' : '#ffffff'}
+                stroke={isRevealed ? 'var(--color-accent)' : '#e4e4e7'}
+                strokeWidth={1}
+                style={{ transition: 'all 200ms ease-out' }}
+              />
+              <text
+                x={lineX[i] ?? 0}
+                y={TOP_PAD - 11}
+                textAnchor="middle"
+                className="pointer-events-none select-none"
+                style={{
+                  fontSize: 11,
+                  fontWeight: 500,
+                  fill: isRevealed ? '#ffffff' : '#3f3f46',
+                  transition: 'fill 200ms ease-out',
+                }}
+              >
+                {truncate(a.name, 5)}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Result labels (bottom) — appear after the corresponding path is revealed. */}
+        {Array.from(resultByEndLine.entries()).map(([endLine, result]) => {
+          // The result shows on every assignment whose endLine is this, but we want
+          // to fade it in once ANY of the paths going to that line is revealed.
+          const anyRevealedToLine = paths.some(
+            (p) => p.endLine === endLine && reveal.revealedNames.has(p.nameIndex),
+          );
+          return (
+            <g key={`r-${endLine}`}>
+              <text
+                x={lineX[endLine] ?? 0}
+                y={TOP_PAD + levels * CELL_H + 18}
+                textAnchor="middle"
+                className="select-none"
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  fill: '#18181b',
+                  opacity: reveal.resultsShown && anyRevealedToLine ? 1 : 0,
+                  transition: 'opacity 300ms ease-out',
+                }}
+              >
+                {truncate(result, 6)}
+              </text>
+            </g>
           );
         })}
 
@@ -176,22 +268,41 @@ export function LadderBoard({ ladder, participants, results, reveal }: LadderBoa
         ) : null}
       </svg>
 
-      {/* Final results list — clean text summary below the SVG. */}
-      {reveal.resultsShown && results.length > 0 ? (
+      {/* Final results list — clean text summary. */}
+      {reveal.resultsShown && assignments.some((a) => a.name !== '' && a.result !== '') ? (
         <ul className="mt-6 grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {paths.map((p, i) => (
-            <li
-              key={`summary-${i}`}
-              className="flex items-center justify-between rounded-xl border border-zinc-100 bg-zinc-50/50 px-3 py-2 text-sm"
-            >
-              <span className="text-zinc-700">{participants[i]}</span>
-              <span className="font-medium text-zinc-900">{results[p.endLine]}</span>
-            </li>
-          ))}
+          {assignments
+            .filter((a) => a.name !== '' && a.result !== '')
+            .map((a) => {
+              const isRevealed = reveal.revealedNames.has(a.nameIndex);
+              return (
+                <li
+                  key={`summary-${a.nameIndex}`}
+                  className="flex items-center justify-between rounded-xl border border-zinc-100 bg-zinc-50/50 px-3 py-2 text-sm"
+                  style={{
+                    opacity: isRevealed ? 1 : 0.4,
+                    transition: 'opacity 280ms ease-out',
+                  }}
+                >
+                  <span className="text-zinc-700">{a.name}</span>
+                  <span className="font-medium text-zinc-900">{a.result}</span>
+                </li>
+              );
+            })}
         </ul>
       ) : null}
     </div>
   );
+}
+
+function polylineLength(points: Array<[number, number]>): number {
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    const [x1, y1] = points[i - 1]!;
+    const [x2, y2] = points[i]!;
+    total += Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+  }
+  return total;
 }
 
 function truncate(s: string, max: number): string {

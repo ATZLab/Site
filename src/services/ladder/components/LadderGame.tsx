@@ -1,198 +1,389 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   assignResults,
   generateLadder,
-  parseList,
+  randomLevels,
   type Assignment,
   type Ladder,
 } from '@/services/ladder/logic';
 import { LadderBoard } from '@/services/ladder/components/LadderBoard';
+import { InputRow } from '@/services/ladder/components/InputRow';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
-import { Input, Textarea } from '@/components/ui/Input';
 
-const DEFAULT_LEVELS = 8;
 const MIN_LEVELS = 4;
-const MAX_LEVELS = 14;
+const MAX_LEVELS = 10;
+
+const INITIAL_NAMES = ['민준', '서연', '도윤', '지우'];
+const INITIAL_RESULTS = ['치킨', '피자', '떡볶이', '아이스크림'];
+
+type RevealMode = 'all' | 'single';
 
 interface RevealState {
-  /** Number of rungs that have been drawn so far (cascades top to bottom). */
-  rungsDrawn: number;
-  /** Number of paths currently animated. */
-  pathsRevealed: number;
-  /** True when the final result labels fade in. */
+  /** Mode used to drive the animation. */
+  mode: RevealMode;
+  /** Indices of names that have finished revealing (i.e. path is fully drawn). */
+  revealedNames: Set<number>;
+  /** True once the result labels for revealed names should fade in. */
   resultsShown: boolean;
 }
 
-const INITIAL_REVEAL: RevealState = { rungsDrawn: 0, pathsRevealed: 0, resultsShown: false };
+const INITIAL_REVEAL: RevealState = {
+  mode: 'all',
+  revealedNames: new Set<number>(),
+  resultsShown: false,
+};
 
 export function LadderGame() {
-  const [participantsInput, setParticipantsInput] = useState('민준\n서연\n도윤\n지우');
-  const [resultsInput, setResultsInput] = useState('치킨\n피자\n떡볶이\n아이스크림');
-  const [levels, setLevels] = useState(DEFAULT_LEVELS);
+  const [names, setNames] = useState<string[]>(INITIAL_NAMES);
+  const [results, setResults] = useState<string[]>(INITIAL_RESULTS);
 
   const [ladder, setLadder] = useState<Ladder | null>(null);
   const [assignments, setAssignments] = useState<Assignment[] | null>(null);
   const [reveal, setReveal] = useState<RevealState>(INITIAL_REVEAL);
-  const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const participants = useMemo(() => parseList(participantsInput), [participantsInput]);
-  const results = useMemo(() => parseList(resultsInput), [resultsInput]);
+  // ---- Input handlers ----------------------------------------------------
 
-  const canStart = !isRunning && participants.length >= 2 && participants.length === results.length;
+  const updateName = useCallback((i: number, value: string) => {
+    setNames((prev) => prev.map((n, idx) => (idx === i ? value : n)));
+  }, []);
+  const removeName = useCallback((i: number) => {
+    setNames((prev) => (prev.length <= 2 ? prev : prev.filter((_, idx) => idx !== i)));
+  }, []);
+  const addName = useCallback(() => {
+    setNames((prev) => [...prev, '']);
+  }, []);
 
-  const reset = useCallback(() => {
+  const updateResult = useCallback((i: number, value: string) => {
+    setResults((prev) => prev.map((r, idx) => (idx === i ? value : r)));
+  }, []);
+  const removeResult = useCallback((i: number) => {
+    setResults((prev) => (prev.length <= 1 ? prev : prev.filter((_, idx) => idx !== i)));
+  }, []);
+  const addResult = useCallback(() => {
+    setResults((prev) => [...prev, '']);
+  }, []);
+
+  // Reset the board whenever inputs change.
+  useEffect(() => {
     setLadder(null);
     setAssignments(null);
     setReveal(INITIAL_REVEAL);
     setError(null);
-  }, []);
+  }, [names, results]);
 
-  const handleStart = useCallback(() => {
+  // ---- Generate + reveal -------------------------------------------------
+
+  const nonEmptyNames = useMemo(() => names.filter((n) => n.trim() !== ''), [names]);
+  const nonEmptyResults = useMemo(() => results.filter((r) => r.trim() !== ''), [results]);
+
+  const buildLadder = useCallback(() => {
     setError(null);
-    if (participants.length < 2) {
+    if (nonEmptyNames.length < 2) {
       setError('이름은 2개 이상 입력해 주세요.');
       return;
     }
-    if (participants.length !== results.length) {
-      setError('이름과 결과의 개수가 같아야 해요.');
+    if (nonEmptyResults.length < 1) {
+      setError('결과는 1개 이상 입력해 주세요.');
       return;
     }
-    const newLadder = generateLadder(participants.length, levels);
-    const newAssignments = assignResults(participants, results, newLadder);
+    const width = Math.max(nonEmptyNames.length, nonEmptyResults.length);
+    const levels = randomLevels(MIN_LEVELS, MAX_LEVELS);
+    const newLadder = generateLadder(width, levels);
+    const newAssignments = assignResults(nonEmptyNames, nonEmptyResults, newLadder);
     setLadder(newLadder);
     setAssignments(newAssignments);
-    setReveal(INITIAL_REVEAL);
-    setIsRunning(true);
-  }, [participants, results, levels]);
+    setReveal({ mode: 'all', revealedNames: new Set<number>(), resultsShown: false });
+  }, [nonEmptyNames, nonEmptyResults]);
 
-  // Animation timeline. Sequentially reveals rungs, then paths, then labels.
+  /** Reveal a single name's path. Builds the ladder lazily if it doesn't exist. */
+  const revealSingle = useCallback(
+    (nameIndex: number) => {
+      if (!ladder) {
+        buildLadder();
+        // buildLadder is async via setState — re-attempt on next tick.
+        return;
+      }
+      setReveal((prev) => {
+        if (prev.mode === 'single' && prev.revealedNames.has(nameIndex)) return prev;
+        const next = new Set(prev.revealedNames);
+        next.add(nameIndex);
+        return { mode: 'single', revealedNames: next, resultsShown: true };
+      });
+    },
+    [ladder, buildLadder],
+  );
+
+  // When ladder becomes available after a single-click on empty board,
+  // kick off the reveal for the clicked name.
+  const [pendingSingleIndex, setPendingSingleIndex] = useState<number | null>(null);
   useEffect(() => {
-    if (!isRunning || !ladder) return;
+    if (ladder && pendingSingleIndex !== null) {
+      setReveal({
+        mode: 'single',
+        revealedNames: new Set([pendingSingleIndex]),
+        resultsShown: true,
+      });
+      setPendingSingleIndex(null);
+    }
+  }, [ladder, pendingSingleIndex]);
 
-    const rungDuration = 80;
-    const rungTotal = ladder.levels * rungDuration + 200;
-    const pathStagger = 250;
-    const pathTotal = ladder.width * pathStagger + 400;
+  const handleRevealSingle = useCallback(
+    (i: number) => {
+      if (ladder) {
+        revealSingle(i);
+      } else {
+        // Ladder doesn't exist yet. Set flag and build it.
+        if (nonEmptyNames.length < 2) {
+          setError('이름은 2개 이상 입력해 주세요.');
+          return;
+        }
+        if (nonEmptyResults.length < 1) {
+          setError('결과는 1개 이상 입력해 주세요.');
+          return;
+        }
+        setPendingSingleIndex(i);
+        buildLadder();
+      }
+    },
+    [ladder, revealSingle, buildLadder, nonEmptyNames.length, nonEmptyResults.length],
+  );
+
+  // ---- Animation timeline for "reveal all" -------------------------------
+
+  // Track the ladder instance we've already started animating. Without this,
+  // the effect would re-run whenever `revealedNames.size` changes (which it
+  // does on every path completion), and the cleanup would cancel the remaining
+  // timers — killing the rest of the animation.
+  const animatedLadderRef = useRef<Ladder | null>(null);
+
+  useEffect(() => {
+    if (!ladder || !assignments || reveal.mode !== 'all') return;
+    if (animatedLadderRef.current === ladder) return;
+    animatedLadderRef.current = ladder;
+
+    const traceableCount = assignments.filter((a) => a.name !== '').length;
+    if (traceableCount === 0) return;
+
+    const PATH_DURATION = 1100; // matches CSS transition
+    const STAGGER = 240;
+    const lastPathEnd = (traceableCount - 1) * STAGGER + PATH_DURATION;
 
     const timers: number[] = [];
-    for (let i = 1; i <= ladder.levels; i++) {
-      timers.push(window.setTimeout(() => setReveal((r) => ({ ...r, rungsDrawn: i })), i * rungDuration));
-    }
-    for (let p = 1; p <= ladder.width; p++) {
+    assignments.forEach((a) => {
+      if (a.name === '') return;
+      const order = assignments.filter((x) => x.name !== '').indexOf(a);
+      const startAt = order * STAGGER;
       timers.push(
-        window.setTimeout(
-          () => setReveal((r) => ({ ...r, pathsRevealed: p })),
-          rungTotal + p * pathStagger,
-        ),
+        window.setTimeout(() => {
+          setReveal((prev) => {
+            if (prev.mode !== 'all') return prev;
+            const next = new Set(prev.revealedNames);
+            next.add(a.nameIndex);
+            return { ...prev, revealedNames: next };
+          });
+        }, startAt),
       );
-    }
+    });
     timers.push(
       window.setTimeout(
-        () => setReveal((r) => ({ ...r, resultsShown: true })),
-        rungTotal + pathTotal,
+        () => setReveal((prev) => ({ ...prev, resultsShown: true })),
+        lastPathEnd + 100,
       ),
     );
-    timers.push(window.setTimeout(() => setIsRunning(false), rungTotal + pathTotal + 200));
 
     return () => timers.forEach((t) => window.clearTimeout(t));
-  }, [ladder, isRunning]);
+  }, [ladder, assignments, reveal.mode]);
 
-  // Reset reveal state when ladder inputs change.
-  useEffect(() => {
-    reset();
-    // We intentionally only respond to identity-changing inputs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [participantsInput, resultsInput, levels]);
+  // ---- Render ------------------------------------------------------------
+
+  const isBoardEmpty = !ladder || !assignments;
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
+    <div className="grid gap-6">
       <Card>
         <CardHeader>
           <p className="text-sm font-medium text-zinc-900">입력</p>
         </CardHeader>
-        <CardBody className="space-y-4">
-          <div>
-            <label htmlFor="ladder-participants" className="mb-1.5 block text-xs text-zinc-600">
-              이름 (한 줄에 하나)
-            </label>
-            <Textarea
-              id="ladder-participants"
-              value={participantsInput}
-              onChange={(e) => setParticipantsInput(e.target.value)}
-              rows={5}
-              placeholder="민준&#10;서연&#10;도윤&#10;지우"
+        <CardBody>
+          <div className="grid gap-6 sm:grid-cols-2">
+            <InputColumn
+              label="이름"
+              hint="시작점 — 비워두면 무시돼요"
+              items={names}
+              onUpdate={updateName}
+              onRemove={removeName}
+              onAdd={addName}
+              minItems={2}
+              placeholder="이름 입력"
             />
-          </div>
-          <div>
-            <label htmlFor="ladder-results" className="mb-1.5 block text-xs text-zinc-600">
-              결과 (한 줄에 하나, 이름과 같은 개수)
-            </label>
-            <Textarea
-              id="ladder-results"
-              value={resultsInput}
-              onChange={(e) => setResultsInput(e.target.value)}
-              rows={5}
-              placeholder="치킨&#10;피자&#10;떡볶이&#10;아이스크림"
-            />
-          </div>
-          <div>
-            <label htmlFor="ladder-levels" className="mb-1.5 block text-xs text-zinc-600">
-              다리 칸 수 ({levels})
-            </label>
-            <Input
-              id="ladder-levels"
-              type="range"
-              min={MIN_LEVELS}
-              max={MAX_LEVELS}
-              value={levels}
-              onChange={(e) => setLevels(Number(e.target.value))}
+            <InputColumn
+              label="결과"
+              hint="도착점 — 이름과 개수가 달라도 돼요"
+              items={results}
+              onUpdate={updateResult}
+              onRemove={removeResult}
+              onAdd={addResult}
+              minItems={1}
+              placeholder="결과 입력"
             />
           </div>
 
-          {error ? <p className="text-sm text-[color:var(--color-accent)]">{error}</p> : null}
+          {error ? <p className="mt-3 text-sm text-[color:var(--color-accent)]">{error}</p> : null}
 
-          <div className="flex gap-2 pt-1">
-            <Button onClick={handleStart} disabled={!canStart}>
-              {ladder ? '다시 뽑기' : '뽑기 시작'}
+          <div className="mt-5 flex flex-wrap gap-2">
+            <Button onClick={buildLadder} disabled={!ladder ? false : false}>
+              {ladder ? '다시 뽑기' : '한 번에 보기'}
             </Button>
-            {ladder ? (
-              <Button variant="secondary" onClick={reset} disabled={isRunning}>
-                초기화
-              </Button>
-            ) : null}
-          </div>
-
-          {participants.length > 0 ? (
-            <p className="text-xs text-zinc-500">
-              {participants.length}명 입력됨 · 결과 {results.length}개
+            <p className="self-center text-xs text-zinc-500">
+              {nonEmptyNames.length}명 · {nonEmptyResults.length}개 · 칸 수는 무작위 (4~10)
             </p>
-          ) : null}
+          </div>
         </CardBody>
       </Card>
 
       <Card>
         <CardHeader>
-          <p className="text-sm font-medium text-zinc-900">결과</p>
+          <div className="flex items-baseline justify-between gap-3">
+            <p className="text-sm font-medium text-zinc-900">결과</p>
+            {!isBoardEmpty ? (
+              <p className="text-xs text-zinc-500">
+                시작점을 클릭하면 그 경로만 보여줘요
+              </p>
+            ) : null}
+          </div>
         </CardHeader>
         <CardBody>
           {ladder && assignments ? (
             <LadderBoard
               ladder={ladder}
-              participants={assignments.map((a) => a.participant)}
-              results={assignments.map((a) => a.result)}
+              assignments={assignments}
               reveal={reveal}
+              onRevealName={handleRevealSingle}
             />
           ) : (
-            <p className="py-12 text-center text-sm text-zinc-500">
-              왼쪽에서 이름과 결과를 입력하고 뽑기를 시작해 보세요.
-            </p>
+            <EmptyBoard
+              names={names}
+              results={results}
+              onRevealName={handleRevealSingle}
+            />
           )}
         </CardBody>
       </Card>
+    </div>
+  );
+}
+
+interface InputColumnProps {
+  label: string;
+  hint: string;
+  items: string[];
+  onUpdate: (i: number, value: string) => void;
+  onRemove: (i: number) => void;
+  onAdd: () => void;
+  minItems: number;
+  placeholder: string;
+}
+
+function InputColumn({
+  label,
+  hint,
+  items,
+  onUpdate,
+  onRemove,
+  onAdd,
+  minItems,
+  placeholder,
+}: InputColumnProps) {
+  return (
+    <div>
+      <div className="mb-2 flex items-baseline justify-between">
+        <label className="text-xs font-medium text-zinc-700">{label}</label>
+        <span className="text-xs text-zinc-400">{hint}</span>
+      </div>
+      <div className="space-y-1.5">
+        {items.map((value, i) => (
+          <InputRow
+            key={i}
+            value={value}
+            onChange={(v) => onUpdate(i, v)}
+            onRemove={() => onRemove(i)}
+            disableRemove={items.length <= minItems}
+            placeholder={placeholder}
+            ariaLabel={`${label} ${i + 1}`}
+            maxLength={20}
+          />
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={onAdd}
+        className="mt-2 inline-flex h-9 items-center gap-1.5 rounded-full border border-dashed border-zinc-200 px-3 text-xs text-zinc-500 transition-colors hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900"
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+        추가
+      </button>
+    </div>
+  );
+}
+
+interface EmptyBoardProps {
+  names: string[];
+  results: string[];
+  onRevealName: (nameIndex: number) => void;
+}
+
+/** Empty state — show clickable name chips. Click any to build the ladder
+ *  AND reveal that one path. Also shows the result chips below as a preview. */
+function EmptyBoard({ names, results, onRevealName }: EmptyBoardProps) {
+  const nonEmptyNames = names.map((n, i) => ({ name: n.trim(), index: i })).filter((n) => n.name);
+  const nonEmptyResults = results.map((r) => r.trim()).filter(Boolean);
+
+  return (
+    <div className="py-8">
+      <div className="mb-6 flex flex-wrap items-center justify-center gap-2">
+        {nonEmptyNames.length === 0 ? (
+          <p className="text-sm text-zinc-400">왼쪽에서 이름을 입력해 주세요</p>
+        ) : (
+          nonEmptyNames.map((n) => (
+            <button
+              key={n.index}
+              type="button"
+              onClick={() => onRevealName(n.index)}
+              className="inline-flex h-9 items-center rounded-full border border-zinc-200 bg-white px-4 text-sm font-medium text-zinc-700 transition-all hover:border-zinc-900 hover:bg-zinc-900 hover:text-white"
+            >
+              {n.name}
+            </button>
+          ))
+        )}
+      </div>
+      <div className="mb-2 flex items-center justify-center gap-2 text-xs text-zinc-400">
+        <span className="inline-block h-px w-8 bg-zinc-200" />
+        결과
+        <span className="inline-block h-px w-8 bg-zinc-200" />
+      </div>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {nonEmptyResults.length === 0 ? (
+          <p className="text-sm text-zinc-400">오른쪽에서 결과를 입력해 주세요</p>
+        ) : (
+          nonEmptyResults.map((r, i) => (
+            <span
+              key={i}
+              className="inline-flex h-9 items-center rounded-full bg-zinc-100 px-4 text-sm text-zinc-500"
+            >
+              {r}
+            </span>
+          ))
+        )}
+      </div>
+      <p className="mt-6 text-center text-xs text-zinc-400">
+        이름을 클릭하면 그 경로만, <span className="font-medium text-zinc-600">한 번에 보기</span>를 누르면 전체가 나와요.
+      </p>
     </div>
   );
 }
