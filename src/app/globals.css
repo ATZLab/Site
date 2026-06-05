@@ -65,3 +65,37 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ----------------------------------------------------------------
+   2048 game animations
+   ---------------------------------------------------------------- */
+@keyframes cell-spawn {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes cell-pop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-cell-spawn {
+  animation: cell-spawn 200ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+.animate-cell-pop {
+  animation: cell-pop 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}

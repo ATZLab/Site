@@ -26,4 +26,10 @@ export const services: ServiceMeta[] = [
     description: '학업·직장·돈·연애·건강 — 가볍게 보는 일일 운세.',
     route: '/lab/fortune',
   },
+  {
+    id: 'game-2048',
+    label: '2048',
+    description: '방향키로 타일 합치기 — 3×3 / 4×4 / 5×5.',
+    route: '/lab/game-2048',
+  },
 ];
