@@ -20,4 +20,10 @@ export const services: ServiceMeta[] = [
     description: '이름과 항목을 입력하면 경로를 추적해 매칭해줘요.',
     route: '/lab/ladder',
   },
+  {
+    id: 'fortune',
+    label: '오늘의 운세',
+    description: '학업·직장·돈·연애·건강 — 가볍게 보는 일일 운세.',
+    route: '/lab/fortune',
+  },
 ];
