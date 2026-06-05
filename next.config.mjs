@@ -7,7 +7,8 @@ const nextConfig = {
 
   // basePath: serves the site at https://<user>.github.io/Site/
   // Set BASE_PATH="" in CI to disable when serving from a custom domain.
-  basePath: process.env.BASE_PATH || `/${repoName}`,
+  // Use ?? (not ||) so an explicitly empty string is respected.
+  basePath: process.env.BASE_PATH ?? `/${repoName}`,
 
   // Static export requires unoptimized images.
   images: { unoptimized: true },
