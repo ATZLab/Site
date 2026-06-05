@@ -40,10 +40,6 @@ jobs:
           BASE_PATH: /Site
 
       - uses: actions/configure-pages@v5
-        with:
-          # First-run convenience: enable Pages automatically if it isn't already.
-          # Requires `pages: write` permission (set at the workflow level).
-          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
