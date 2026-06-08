@@ -32,4 +32,10 @@ export const services: ServiceMeta[] = [
     description: '방향키로 타일 합치기 — 3×3 / 4×4 / 5×5.',
     route: '/lab/game-2048',
   },
+  {
+    id: 'fortress',
+    label: '포트리스',
+    description: '턴제 포물선 대전. 1P vs AI 또는 2P 한 기기.',
+    route: '/lab/fortress',
+  },
 ];
