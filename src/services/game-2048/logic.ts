@@ -1,12 +1,53 @@
 /**
  * 2048 game — pure logic, framework-free.
  * Variable board size (3×3, 4×4, 5×5, ...). Original implementation.
+ *
+ * Two state representations are supported:
+ *   - `Board`: flat row-major `number[]` (the values; identity not tracked).
+ *   - `Tile[]`: full tile objects with stable IDs, positions, and values.
+ *
+ * `Board` is convenient for win/lose checks. `Tile[]` is what the UI
+ * actually renders, because stable IDs let React animate the slide of
+ * each individual tile as the board changes.
  */
 
 export type Direction = 'up' | 'down' | 'left' | 'right';
 
 /** Flat row-major array, length = size * size. 0 = empty. */
 export type Board = number[];
+
+/* ----------------------------------------------------------------
+   Tiles (stable-identity state)
+   ---------------------------------------------------------------- */
+
+export interface Tile {
+  id: string;
+  row: number;
+  col: number;
+  value: number;
+}
+
+let _idCounter = 0;
+function nextId(): string {
+  _idCounter += 1;
+  return `t${_idCounter}`;
+}
+
+/** Convert a flat board to a list of tiles. Each non-zero cell gets a fresh
+ *  ID. Used when bootstrapping a new game. */
+export function tilesFromBoard(board: Board): Tile[] {
+  const size = boardSize(board);
+  const tiles: Tile[] = [];
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      const v = board[r * size + c]!;
+      if (v !== 0) {
+        tiles.push({ id: nextId(), row: r, col: c, value: v });
+      }
+    }
+  }
+  return tiles;
+}
 
 export const MIN_SIZE = 3;
 export const MAX_SIZE = 6;
@@ -20,7 +61,17 @@ export function boardSize(board: Board): number {
   return Math.round(Math.sqrt(board.length));
 }
 
-/** Pick a random empty cell index. Returns -1 if no empty cells. */
+/** Flatten a tile list back into a `Board` (useful for win/lose checks). */
+export function boardFromTiles(tiles: Tile[], size: number): Board {
+  const board = createEmptyBoard(size);
+  for (const t of tiles) {
+    if (t.value === 0) continue;
+    board[t.row * size + t.col] = t.value;
+  }
+  return board;
+}
+
+/** Pick a random empty cell index from a `Board`. Returns -1 if full. */
 function pickRandomEmpty(board: Board, rng: () => number): number {
   const empties: number[] = [];
   for (let i = 0; i < board.length; i++) if (board[i] === 0) empties.push(i);
@@ -47,21 +98,16 @@ export function newGame(size: number, rng: () => number = Math.random): Board {
 }
 
 /* ----------------------------------------------------------------
-   Sliding / merging
+   Sliding / merging on a flat board
    ---------------------------------------------------------------- */
 
-/**
- * Slide + merge a 1D row (length = size) toward index 0.
- * Returns the new row and the score gained by merges.
- */
+/** Slide + merge a 1D row (length = size) toward index 0. */
 function slideRowLeft(row: number[]): { row: number[]; gained: number } {
   const size = row.length;
-  // 1) Compact non-zero values to the left.
   const compact: number[] = [];
   for (let i = 0; i < size; i++) {
     if (row[i] !== 0) compact.push(row[i]!);
   }
-  // 2) Merge equal adjacent values, left to right.
   const merged: number[] = [];
   let gained = 0;
   let i = 0;
@@ -78,7 +124,6 @@ function slideRowLeft(row: number[]): { row: number[]; gained: number } {
       i += 1;
     }
   }
-  // 3) Pad with zeros to size.
   while (merged.length < size) merged.push(0);
   return { row: merged, gained };
 }
@@ -87,7 +132,7 @@ function reverseRow(row: number[]): number[] {
   return row.slice().reverse();
 }
 
-/** Move the board in a given direction. Returns { board, gained, moved }. */
+/** Move the board in a given direction. Returns `{ board, gained, moved }`. */
 export function move(
   board: Board,
   direction: Direction,
@@ -117,7 +162,7 @@ export function move(
       const col: number[] = [];
       for (let r = 0; r < size; r++) col.push(board[r * size + c]!);
       const processed =
-        direction === 'up' ? slideRowLeft(col) : slideRowLeft(reverseRow(col));
+        direction === 'up' ? slideRowLeft(col) : slideRowLeft(reverseCol(col));
       const finalCol = direction === 'up' ? processed.row : reverseCol(processed.row);
       for (let r = 0; r < size; r++) {
         const v = finalCol[r]!;
@@ -133,9 +178,145 @@ export function move(
 }
 
 function reverseCol(col: number[]): number[] {
-  // For 'down' we slide the column toward index size-1. We achieved that by
-  // reversing the column, sliding left, then reversing back.
   return col.slice().reverse();
+}
+
+/* ----------------------------------------------------------------
+   Sliding / merging on `Tile[]` — preserves tile identity
+   ---------------------------------------------------------------- */
+
+export interface ApplyMoveResult {
+  tiles: Tile[];
+  gained: number;
+  moved: boolean;
+  /** IDs of tiles that doubled in value this turn (need pop animation). */
+  mergedIds: ReadonlySet<string>;
+}
+
+interface OrderedLine {
+  /** Tiles in this line, ordered from the "near" edge (the edge they slide
+   *  toward) to the "far" edge. */
+  nearToFar: Tile[];
+}
+
+/** Group tiles into lines and order them by slide direction. */
+function buildLines(tiles: Tile[], size: number, direction: Direction): OrderedLine[] {
+  const lines: OrderedLine[] = [];
+  if (direction === 'left' || direction === 'right') {
+    for (let r = 0; r < size; r++) {
+      const inRow = tiles.filter((t) => t.row === r).sort((a, b) => a.col - b.col);
+      lines.push({ nearToFar: direction === 'left' ? inRow : inRow.slice().reverse() });
+    }
+  } else {
+    for (let c = 0; c < size; c++) {
+      const inCol = tiles.filter((t) => t.col === c).sort((a, b) => a.row - b.row);
+      lines.push({ nearToFar: direction === 'up' ? inCol : inCol.slice().reverse() });
+    }
+  }
+  return lines;
+}
+
+/**
+ * Slide all tiles one step in `direction`. Preserves tile IDs.
+ *
+ * For each line, we walk near → far. We keep a "slot" that tracks the
+ * position the last-placed tile occupies. The first tile of a merge pair
+ * claims the slot and doubles in value; the second tile is dropped from
+ * the result. All remaining tiles slide forward into the gap.
+ */
+export function applyMove(
+  tiles: Tile[],
+  size: number,
+  direction: Direction,
+): ApplyMoveResult {
+  const lines = buildLines(tiles, size, direction);
+  const kept: Tile[] = [];
+  const mergedIds = new Set<string>();
+  let totalGained = 0;
+  let anyMoved = false;
+
+  for (const { nearToFar } of lines) {
+    let slot = -1; // index in the line where the last-placed tile sits
+    let slotTile: Tile | null = null;
+    for (const tile of nearToFar) {
+      if (slotTile && slotTile.value === tile.value) {
+        // Merge: the previous tile absorbs this one.
+        const newValue = slotTile.value * 2;
+        totalGained += newValue;
+        const merged: Tile = {
+          id: slotTile.id,
+          row: direction === 'down' || direction === 'up' ? slotTile.row : slotTile.row,
+          col: direction === 'left' || direction === 'right' ? slotTile.col : slotTile.col,
+          value: newValue,
+        };
+        // Rewrite `merged` to the slot's current (row, col) — it's already
+        // there for slotTile; we just need the new value.
+        merged.value = newValue;
+        slotTile = merged;
+        mergedIds.add(slotTile.id);
+        // The absorbed tile is dropped — don't push it.
+        anyMoved = true;
+        continue;
+      }
+      // No merge: advance the slot, place this tile there.
+      slot += 1;
+      const newPos =
+        direction === 'left'
+          ? { row: tile.row, col: slot }
+          : direction === 'right'
+            ? { row: tile.row, col: size - 1 - slot }
+            : direction === 'up'
+              ? { row: slot, col: tile.col }
+              : { row: size - 1 - slot, col: tile.col };
+      if (newPos.row !== tile.row || newPos.col !== tile.col) anyMoved = true;
+      const placed: Tile = { id: tile.id, row: newPos.row, col: newPos.col, value: tile.value };
+      kept.push(placed);
+      slotTile = placed;
+    }
+  }
+
+  return { tiles: kept, gained: totalGained, moved: anyMoved, mergedIds };
+}
+
+/** Pick a random empty cell, given a list of occupied tiles. Returns null if
+ *  the board is full. */
+function pickRandomEmptyCell(
+  tiles: Tile[],
+  size: number,
+  rng: () => number,
+): { row: number; col: number } | null {
+  const occupied = new Set<string>();
+  for (const t of tiles) occupied.add(`${t.row},${t.col}`);
+  const empties: { row: number; col: number }[] = [];
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      if (!occupied.has(`${r},${c}`)) empties.push({ row: r, col: c });
+    }
+  }
+  if (empties.length === 0) return null;
+  return empties[Math.floor(rng() * empties.length)]!;
+}
+
+export interface AddTileResult {
+  tiles: Tile[];
+  /** ID of the new tile, or null if no empty cell. */
+  spawnedId: string | null;
+}
+
+/** Append a new 2/4 tile to a random empty cell. Returns the new tile list
+ *  and the ID of the spawned tile (used to trigger a one-shot spawn
+ *  animation). */
+export function addRandomTileToTiles(
+  tiles: Tile[],
+  size: number,
+  rng: () => number = Math.random,
+): AddTileResult {
+  const cell = pickRandomEmptyCell(tiles, size, rng);
+  if (!cell) return { tiles: tiles.slice(), spawnedId: null };
+  const value = rng() < 0.9 ? 2 : 4;
+  const id = nextId();
+  const newTile: Tile = { id, row: cell.row, col: cell.col, value };
+  return { tiles: [...tiles, newTile], spawnedId: id };
 }
 
 /* ----------------------------------------------------------------
@@ -152,7 +333,6 @@ export function canMove(board: Board): boolean {
   for (let i = 0; i < board.length; i++) {
     if (board[i] === 0) return true;
   }
-  // No empties — check for any adjacent equal pair.
   for (let r = 0; r < size; r++) {
     for (let c = 0; c < size; c++) {
       const v = board[r * size + c]!;

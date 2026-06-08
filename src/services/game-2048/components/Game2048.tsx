@@ -4,12 +4,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import {
+  addRandomTileToTiles,
+  applyMove,
+  boardFromTiles,
   hasWon,
   isGameOver,
-  move,
   newGame,
-  type Board,
+  tilesFromBoard,
   type Direction,
+  type Tile,
 } from '@/services/game-2048/logic';
 import { Cell } from '@/services/game-2048/components/Cell';
 
@@ -19,6 +22,7 @@ type Size = (typeof SIZES)[number];
 const BEST_KEY = 'best-2048';
 const ANIMATION_MS = 200;
 const SWIPE_THRESHOLD = 30; // px
+const TILE_GAP_PX = 8; // must match `gap-2` in Tailwind v4
 
 function formatScore(n: number): string {
   return n.toLocaleString('en-US');
@@ -26,14 +30,18 @@ function formatScore(n: number): string {
 
 export function Game2048() {
   const [size, setSize] = useState<Size>(4);
-  const [board, setBoard] = useState<Board>(() => newGame(4));
-  const [prevBoard, setPrevBoard] = useState<Board>(board);
+  const [tiles, setTiles] = useState<Tile[]>(() => tilesFromBoard(newGame(4)));
   const [score, setScore] = useState(0);
   const [bestScores, setBestScores] = useState<Record<number, number>>({});
   const [hasSeenWin, setHasSeenWin] = useState(false);
   const [showWinModal, setShowWinModal] = useState(false);
   const [showGameOver, setShowGameOver] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
+
+  // Per-tile transient animation flags. Cleared after `ANIMATION_MS`.
+  // Keyed by tile id so we can flip them on exactly one render.
+  const [newIds, setNewIds] = useState<ReadonlySet<string>>(new Set());
+  const [mergedIds, setMergedIds] = useState<ReadonlySet<string>>(new Set());
 
   const touchStart = useRef<{ x: number; y: number } | null>(null);
 
@@ -71,52 +79,55 @@ export function Game2048() {
   }, [score, size]);
 
   const resetGame = useCallback((nextSize: Size = size) => {
-    setBoard(newGame(nextSize));
-    setPrevBoard(newGame(nextSize));
+    setTiles(tilesFromBoard(newGame(nextSize)));
     setScore(0);
     setHasSeenWin(false);
     setShowWinModal(false);
     setShowGameOver(false);
+    setNewIds(new Set());
+    setMergedIds(new Set());
   }, [size]);
 
   const changeSize = useCallback((nextSize: Size) => {
     setSize(nextSize);
-    setBoard(newGame(nextSize));
-    setPrevBoard(newGame(nextSize));
+    setTiles(tilesFromBoard(newGame(nextSize)));
     setScore(0);
     setHasSeenWin(false);
     setShowWinModal(false);
     setShowGameOver(false);
+    setNewIds(new Set());
+    setMergedIds(new Set());
   }, []);
 
   const handleMove = useCallback(
     (direction: Direction) => {
       if (isAnimating || showWinModal) return;
-      const result = move(board, direction);
+      const result = applyMove(tiles, size, direction);
       if (!result.moved) return;
 
-      const withNewTile = addRandomTileInPlace(result.board);
-      const oldBoard = board;
-      setPrevBoard(oldBoard);
-      setBoard(withNewTile);
+      const spawned = addRandomTileToTiles(result.tiles, size);
+      setTiles(spawned.tiles);
       setScore((s) => s + result.gained);
+      setMergedIds(result.mergedIds);
+      setNewIds(spawned.spawnedId ? new Set([spawned.spawnedId]) : new Set());
       setIsAnimating(true);
 
       window.setTimeout(() => {
         setIsAnimating(false);
-        // Game-over check first.
-        if (isGameOver(withNewTile)) {
+        setMergedIds(new Set());
+        setNewIds(new Set());
+        const board = boardFromTiles(spawned.tiles, size);
+        if (isGameOver(board)) {
           setShowGameOver(true);
           return;
         }
-        // Win check — only show the modal the first time.
-        if (!hasSeenWin && hasWon(withNewTile)) {
+        if (!hasSeenWin && hasWon(board)) {
           setHasSeenWin(true);
           setShowWinModal(true);
         }
       }, ANIMATION_MS);
     },
-    [board, isAnimating, showWinModal, hasSeenWin],
+    [tiles, size, isAnimating, showWinModal, hasSeenWin],
   );
 
   // Keyboard listener.
@@ -231,75 +242,85 @@ export function Game2048() {
             onTouchEnd={onTouchEnd}
           >
             <div
-              className="grid gap-2 rounded-2xl bg-zinc-100 p-2"
-              style={{ gridTemplateColumns: `repeat(${size}, 1fr)` }}
+              className="board relative aspect-square w-full rounded-2xl bg-zinc-100 p-2"
+              style={
+                {
+                  '--board-size': size,
+                  '--gap': `${TILE_GAP_PX}px`,
+                  '--cell': `calc((100% - ${(size - 1) * TILE_GAP_PX}px - 16px) / ${size})`,
+                } as React.CSSProperties
+              }
             >
-              {board.map((value, i) => {
-                const prev = prevBoard[i] ?? 0;
-                const isNew = prev === 0 && value !== 0;
-                const isMerged = prev !== 0 && value !== 0 && value === prev * 2;
-                return (
-                  <Cell
-                    key={`${i}-${value}`}
-                    value={value}
-                    isNew={isNew}
-                    isMerged={isMerged}
-                  />
-                );
-              })}
-            </div>
-
-            {/* Overlays */}
-            {showGameOver ? (
-              <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-white/80 backdrop-blur-sm">
-                <div className="text-center">
-                  <p className="mb-1 text-sm font-medium text-zinc-500">Game Over</p>
-                  <p className="mb-4 font-mono text-2xl tabular-nums text-zinc-900">
-                    {formatScore(score)}점
-                  </p>
-                  <Button onClick={() => resetGame()}>다시 시도</Button>
-                </div>
+              {/* Background grid of empty cells — gives the board its base
+                  visual rhythm. Static, not animated. */}
+              <div
+                className="absolute inset-2 grid"
+                style={{ gridTemplateColumns: `repeat(${size}, 1fr)`, gap: `${TILE_GAP_PX}px` }}
+                aria-hidden
+              >
+                {Array.from({ length: size * size }).map((_, i) => (
+                  <div key={i} className="rounded-lg bg-zinc-200/60" />
+                ))}
               </div>
-            ) : null}
 
-            {showWinModal ? (
-              <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-white/85 backdrop-blur-sm">
-                <div className="w-full max-w-xs px-6 text-center">
-                  <p className="mb-1 text-xs font-medium uppercase tracking-wide text-[color:var(--color-accent)]">
-                    You did it
-                  </p>
-                  <p className="mb-2 font-mono text-4xl font-bold tabular-nums text-zinc-900">
-                    2048
-                  </p>
-                  <p className="mb-5 text-sm text-zinc-600">
-                    여기까지 잘 왔어요. 계속 가도 되고, 여기서 끝내도 돼요.
-                  </p>
-                  <div className="flex justify-center gap-2">
-                    <Button variant="secondary" onClick={() => resetGame()}>
-                      다시 시도
-                    </Button>
-                    <Button onClick={() => setShowWinModal(false)}>계속</Button>
+              {/* Animated tiles. `translate` is animated by CSS; the
+                  browser interpolates between the old and new positions. */}
+              {tiles.map((tile) => (
+                <div
+                  key={tile.id}
+                  className="cell-slot"
+                  style={{
+                    width: 'var(--cell)',
+                    height: 'var(--cell)',
+                    transform: `translate(calc(${tile.col} * (var(--cell) + var(--gap))), calc(${tile.row} * (var(--cell) + var(--gap))))`,
+                  }}
+                >
+                  <Cell
+                    tile={tile}
+                    isNew={newIds.has(tile.id)}
+                    isMerged={mergedIds.has(tile.id)}
+                  />
+                </div>
+              ))}
+
+              {/* Overlays */}
+              {showGameOver ? (
+                <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-white/80 backdrop-blur-sm">
+                  <div className="text-center">
+                    <p className="mb-1 text-sm font-medium text-zinc-500">Game Over</p>
+                    <p className="mb-4 font-mono text-2xl tabular-nums text-zinc-900">
+                      {formatScore(score)}점
+                    </p>
+                    <Button onClick={() => resetGame()}>다시 시도</Button>
                   </div>
                 </div>
-              </div>
-            ) : null}
+              ) : null}
+
+              {showWinModal ? (
+                <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-white/85 backdrop-blur-sm">
+                  <div className="w-full max-w-xs px-6 text-center">
+                    <p className="mb-1 text-xs font-medium uppercase tracking-wide text-[color:var(--color-accent)]">
+                      You did it
+                    </p>
+                    <p className="mb-2 font-mono text-4xl font-bold tabular-nums text-zinc-900">
+                      2048
+                    </p>
+                    <p className="mb-5 text-sm text-zinc-600">
+                      여기까지 잘 왔어요. 계속 가도 되고, 여기서 끝내도 돼요.
+                    </p>
+                    <div className="flex justify-center gap-2">
+                      <Button variant="secondary" onClick={() => resetGame()}>
+                        다시 시도
+                      </Button>
+                      <Button onClick={() => setShowWinModal(false)}>계속</Button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </div>
         </CardBody>
       </Card>
     </div>
   );
-}
-
-/**
- * Place a 2 (90%) or 4 (10%) at a random empty cell of the given board.
- * Returns a new array (immutable).
- */
-function addRandomTileInPlace(board: Board): Board {
-  const empties: number[] = [];
-  for (let i = 0; i < board.length; i++) if (board[i] === 0) empties.push(i);
-  if (empties.length === 0) return board;
-  const idx = empties[Math.floor(Math.random() * empties.length)]!;
-  const next = board.slice();
-  next[idx] = Math.random() < 0.9 ? 2 : 4;
-  return next;
 }

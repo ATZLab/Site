@@ -1,12 +1,13 @@
 'use client';
 
+import type { Tile } from '@/services/game-2048/logic';
 import { tileTier } from '@/services/game-2048/logic';
 
 interface CellProps {
-  value: number;
-  /** Was this cell empty in the previous board? (spawn animation) */
+  tile: Tile;
+  /** Set on the very first render of this tile (spawns into existence). */
   isNew: boolean;
-  /** Did the value just double from a merge? (pop animation) */
+  /** Set on the render where this tile's value just doubled (pop). */
   isMerged: boolean;
 }
 
@@ -19,37 +20,39 @@ const TIER_CLASS: Record<ReturnType<typeof tileTier>, string> = {
   5: 'bg-[#c93c2e] text-white', // 512+, deep coral
 };
 
-export function Cell({ value, isNew, isMerged }: CellProps) {
-  const tier = tileTier(value);
+export function Cell({ tile, isNew, isMerged }: CellProps) {
+  const tier = tileTier(tile.value);
   const classes = TIER_CLASS[tier];
-  const isEmpty = value === 0;
 
   // Font size scales with the number of digits so 5-digit tiles still fit.
   const text =
-    value >= 1000 ? 'text-base sm:text-lg' : value >= 100 ? 'text-lg sm:text-xl' : 'text-xl sm:text-2xl';
+    tile.value >= 1000
+      ? 'text-base sm:text-lg'
+      : tile.value >= 100
+        ? 'text-lg sm:text-xl'
+        : 'text-xl sm:text-2xl';
 
-  // Pick exactly one animation: spawn (new tile) takes priority over pop
-  // (merge) since they shouldn't co-occur anyway.
-  const animClass = isEmpty
-    ? ''
-    : isNew
-      ? 'animate-cell-spawn'
-      : isMerged
-        ? 'animate-cell-pop'
-        : '';
+  // Spawn (scale 0→1) and pop (scale 1→1.18→1) use `transform`, so they
+  // don't fight with the slide transition (which uses `translate`).
+  const animClass = isNew
+    ? 'animate-cell-spawn'
+    : isMerged
+      ? 'animate-cell-pop'
+      : '';
 
   return (
     <div
       className={[
-        'relative flex aspect-square items-center justify-center rounded-lg',
+        'cell',
+        'flex aspect-square items-center justify-center rounded-lg',
         'font-mono font-semibold tabular-nums',
-        'transition-colors duration-200',
         classes,
         text,
         animClass,
       ].join(' ')}
+      data-tile
     >
-      {isEmpty ? '' : value}
+      {tile.value}
     </div>
   );
 }
