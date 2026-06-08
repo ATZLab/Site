@@ -219,10 +219,21 @@ function buildLines(tiles: Tile[], size: number, direction: Direction): OrderedL
 /**
  * Slide all tiles one step in `direction`. Preserves tile IDs.
  *
- * For each line, we walk near → far. We keep a "slot" that tracks the
- * position the last-placed tile occupies. The first tile of a merge pair
- * claims the slot and doubles in value; the second tile is dropped from
- * the result. All remaining tiles slide forward into the gap.
+ * Algorithm (the standard 2048 way, no chain merges):
+ *   1. For each line, compact the tiles in slide-toward order — this is
+ *      the "slide" step.
+ *   2. Walk the compacted list with `i += 2` after a merge, so a tile
+ *      that just merged cannot merge again in the same move. This is the
+ *      "merge" step. Real 2048 enforces this: one tile, one merge per turn.
+ *   3. Pad with empty slots — done implicitly by not pushing the trailing
+ *      `null` slots.
+ *
+ * Earlier draft of this function tried to merge "the last tile currently
+ * in the output" with each incoming tile. That had two bugs: the
+ * doubled value never made it back to the kept list (so 2+2 stayed as
+ * [2, _, _, _]), and a freshly-merged tile could be merged again in the
+ * same move (so [4, 4, 8, 8] left became [16, 8, _, _] instead of
+ * [8, 16, _, _]). The compact-then-merge approach below fixes both.
  */
 export function applyMove(
   tiles: Tile[],
@@ -236,42 +247,38 @@ export function applyMove(
   let anyMoved = false;
 
   for (const { nearToFar } of lines) {
-    let slot = -1; // index in the line where the last-placed tile sits
-    let slotTile: Tile | null = null;
-    for (const tile of nearToFar) {
-      if (slotTile && slotTile.value === tile.value) {
-        // Merge: the previous tile absorbs this one.
-        const newValue = slotTile.value * 2;
+    // 1. Compact: drop zeros, preserve slide-toward order.
+    const compact = nearToFar.filter((t) => t.value !== 0);
+    // 2. Merge adjacent equal pairs. `i += 2` after a merge so the just-
+    //    merged tile can NOT merge again in the same move.
+    const lineOut: Tile[] = [];
+    let i = 0;
+    while (i < compact.length) {
+      const cur = compact[i]!;
+      const next = compact[i + 1];
+      if (next && cur.value === next.value) {
+        const newValue = cur.value * 2;
         totalGained += newValue;
-        const merged: Tile = {
-          id: slotTile.id,
-          row: direction === 'down' || direction === 'up' ? slotTile.row : slotTile.row,
-          col: direction === 'left' || direction === 'right' ? slotTile.col : slotTile.col,
-          value: newValue,
-        };
-        // Rewrite `merged` to the slot's current (row, col) — it's already
-        // there for slotTile; we just need the new value.
-        merged.value = newValue;
-        slotTile = merged;
-        mergedIds.add(slotTile.id);
-        // The absorbed tile is dropped — don't push it.
-        anyMoved = true;
-        continue;
+        lineOut.push({ ...cur, value: newValue });
+        mergedIds.add(cur.id);
+        i += 2;
+      } else {
+        lineOut.push(cur);
+        i += 1;
       }
-      // No merge: advance the slot, place this tile there.
-      slot += 1;
-      const newPos =
-        direction === 'left'
-          ? { row: tile.row, col: slot }
-          : direction === 'right'
-            ? { row: tile.row, col: size - 1 - slot }
-            : direction === 'up'
-              ? { row: slot, col: tile.col }
-              : { row: size - 1 - slot, col: tile.col };
+    }
+    // 3. Place each output tile at its slot. `lineOut` is in slot order
+    //    (nearest to the slide direction first), so slot index k means
+    //    "k-th slot from the slide direction".
+    for (let slot = 0; slot < lineOut.length; slot++) {
+      const tile = lineOut[slot]!;
+      let newPos: { row: number; col: number };
+      if (direction === 'left') newPos = { row: tile.row, col: slot };
+      else if (direction === 'right') newPos = { row: tile.row, col: size - 1 - slot };
+      else if (direction === 'up') newPos = { row: slot, col: tile.col };
+      else newPos = { row: size - 1 - slot, col: tile.col }; // down
       if (newPos.row !== tile.row || newPos.col !== tile.col) anyMoved = true;
-      const placed: Tile = { id: tile.id, row: newPos.row, col: newPos.col, value: tile.value };
-      kept.push(placed);
-      slotTile = placed;
+      kept.push({ id: tile.id, row: newPos.row, col: newPos.col, value: tile.value });
     }
   }
 
