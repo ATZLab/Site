@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import {
@@ -22,7 +22,8 @@ type Size = (typeof SIZES)[number];
 const BEST_KEY = 'best-2048';
 const ANIMATION_MS = 200;
 const SWIPE_THRESHOLD = 30; // px
-const TILE_GAP_PX = 8; // must match `gap-2` in Tailwind v4
+const BOARD_PADDING = 8; // p-2 on the board container
+const CELL_GAP = 8; // gap between tiles
 
 function formatScore(n: number): string {
   return n.toLocaleString('en-US');
@@ -44,6 +45,27 @@ export function Game2048() {
   const [mergedIds, setMergedIds] = useState<ReadonlySet<string>>(new Set());
 
   const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const boardRef = useRef<HTMLDivElement>(null);
+  const [boardWidth, setBoardWidth] = useState(0);
+
+  // Measure the actual board width once on mount + on resize. The cell size
+  // and translate values must be in explicit pixels because `transform:
+  // translate(<percentage>)` would resolve % against the tile itself, not
+  // the board — that's a bug we already shipped once, so we measure in JS.
+  useLayoutEffect(() => {
+    const el = boardRef.current;
+    if (!el) return;
+    const update = () => setBoardWidth(el.offsetWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const cellSize =
+    boardWidth > 0
+      ? (boardWidth - 2 * BOARD_PADDING - (size - 1) * CELL_GAP) / size
+      : 0;
 
   // Load best scores from localStorage.
   useEffect(() => {
@@ -242,46 +264,54 @@ export function Game2048() {
             onTouchEnd={onTouchEnd}
           >
             <div
+              ref={boardRef}
               className="board relative aspect-square w-full rounded-2xl bg-zinc-100 p-2"
-              style={
-                {
-                  '--board-size': size,
-                  '--gap': `${TILE_GAP_PX}px`,
-                  '--cell': `calc((100% - ${(size - 1) * TILE_GAP_PX}px - 16px) / ${size})`,
-                } as React.CSSProperties
-              }
             >
               {/* Background grid of empty cells — gives the board its base
-                  visual rhythm. Static, not animated. */}
-              <div
-                className="absolute inset-2 grid"
-                style={{ gridTemplateColumns: `repeat(${size}, 1fr)`, gap: `${TILE_GAP_PX}px` }}
-                aria-hidden
-              >
-                {Array.from({ length: size * size }).map((_, i) => (
-                  <div key={i} className="rounded-lg bg-zinc-200/60" />
-                ))}
-              </div>
-
-              {/* Animated tiles. `translate` is animated by CSS; the
-                  browser interpolates between the old and new positions. */}
-              {tiles.map((tile) => (
+                  visual rhythm. Static, not animated. We size and position
+                  it the same way as a cell-slot, so the two stay aligned
+                  regardless of the rendered board width. */}
+              {boardWidth > 0 ? (
                 <div
-                  key={tile.id}
-                  className="cell-slot"
+                  className="absolute grid"
                   style={{
-                    width: 'var(--cell)',
-                    height: 'var(--cell)',
-                    transform: `translate(calc(${tile.col} * (var(--cell) + var(--gap))), calc(${tile.row} * (var(--cell) + var(--gap))))`,
+                    top: BOARD_PADDING,
+                    left: BOARD_PADDING,
+                    width: size * cellSize + (size - 1) * CELL_GAP,
+                    height: size * cellSize + (size - 1) * CELL_GAP,
+                    gridTemplateColumns: `repeat(${size}, ${cellSize}px)`,
+                    gap: CELL_GAP,
                   }}
+                  aria-hidden
                 >
-                  <Cell
-                    tile={tile}
-                    isNew={newIds.has(tile.id)}
-                    isMerged={mergedIds.has(tile.id)}
-                  />
+                  {Array.from({ length: size * size }).map((_, i) => (
+                    <div key={i} className="rounded-lg bg-zinc-200/60" />
+                  ))}
                 </div>
-              ))}
+              ) : null}
+
+              {/* Animated tiles. `transform: translate` is animated by CSS
+                  (see `.cell-slot` rule in globals.css); the browser
+                  interpolates between the old and new positions. */}
+              {boardWidth > 0
+                ? tiles.map((tile) => (
+                    <div
+                      key={tile.id}
+                      className="cell-slot"
+                      style={{
+                        width: cellSize,
+                        height: cellSize,
+                        transform: `translate(${BOARD_PADDING + tile.col * (cellSize + CELL_GAP)}px, ${BOARD_PADDING + tile.row * (cellSize + CELL_GAP)}px)`,
+                      }}
+                    >
+                      <Cell
+                        tile={tile}
+                        isNew={newIds.has(tile.id)}
+                        isMerged={mergedIds.has(tile.id)}
+                      />
+                    </div>
+                  ))
+                : null}
 
               {/* Overlays */}
               {showGameOver ? (

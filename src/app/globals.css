@@ -101,14 +101,15 @@ body {
 }
 
 /* Each tile sits inside a `.cell-slot` that gets `transform: translate(...)`
-   from the JS. We animate `translate` (the standalone CSS property) so it
-   doesn't fight the `transform: scale()` used by spawn/pop. The slot has
-   its own width/height; the inner `.cell` is just a styled block. */
+   from the JS in pixel units. We animate the standalone `translate` CSS
+   property so it doesn't fight the `transform: scale()` used by spawn/pop.
+   Note: we must NOT put `transform: translate(<percentage>)` here — the
+   `%` would resolve against the slot's own size, not the board. JS
+   computes the pixel offsets at render time. */
 .cell-slot {
   position: absolute;
-  top: 8px;
-  left: 8px;
-  /* Position is set inline via `transform: translate(...)`. */
+  top: 0;
+  left: 0;
   transition: translate 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
   will-change: translate;
 }
